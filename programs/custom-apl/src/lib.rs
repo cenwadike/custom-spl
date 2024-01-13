@@ -1,7 +1,7 @@
 use anchor_lang::{prelude::*, solana_program::program::invoke_signed,};
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{mint_to, Mint, MintTo, Token, TokenAccount},
+    token::{mint_to, Mint, MintTo, Token, TokenAccount, Transfer,},
 };
 use mpl_token_metadata::instruction::create_metadata_accounts_v3;
 
@@ -10,7 +10,7 @@ declare_id!("2rtmSEY3TG51Qxb34Fq5LB4XTqdAzTwNKrD333ysb1ia");
 #[program]
 mod token_minter {
     use super::*;
-    pub fn init_token(ctx: Context<InitToken>, metadata: InitTokenParams) -> Result<()> {
+    pub fn initialize_account(ctx: Context<InitToken>, metadata: InitTokenParams) -> Result<()> {
         let seeds = &["mint".as_bytes(), &[*ctx.bumps.get("mint").unwrap()]];
         let signer = [&seeds[..]];
 
@@ -52,7 +52,7 @@ mod token_minter {
         Ok(())
     }
 
-    pub fn mint_tokens(ctx: Context<MintTokens>, quantity: u64) -> Result<()> {
+    pub fn mint(ctx: Context<MintTokens>, amount: u64) -> Result<()> {
         let seeds = &["mint".as_bytes(), &[*ctx.bumps.get("mint").unwrap()]];
         let signer = [&seeds[..]];
 
@@ -66,13 +66,38 @@ mod token_minter {
                 },
                 &signer,
             ),
-            quantity,
+            amount,
         )?;
         Ok(())
     }
 
-    pub fn transfer_token(_ctx: Context<TransferToken>) -> Result<()> {
-        // TODO: 
+    pub fn transfer(ctx: Context<TransferToken>, amount: u64) -> Result<()> {
+        let seeds = &["mint".as_bytes(), &[*ctx.bumps.get("mint").unwrap()]];
+        let signer = [&seeds[..]];
+
+        // get 3% of amount
+        let fee = (amount * 3)/100;
+        let new_amount = amount - fee;
+
+        // transfer amount
+        let transfer_instruction = Transfer {
+            from: ctx.accounts.from.to_account_info(),
+            to: ctx.accounts.to.to_account_info(),
+            authority: ctx.accounts.mint.to_account_info()
+        };
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_ctx = CpiContext::new_with_signer(cpi_program, transfer_instruction, &signer);
+        anchor_spl::token::transfer(cpi_ctx, new_amount)?;
+
+        // transfer fee
+        let transfer_instruction = Transfer {
+            from: ctx.accounts.from.to_account_info(),
+            to: ctx.accounts.mint.to_account_info(),
+            authority: ctx.accounts.mint.to_account_info()
+        };
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_ctx = CpiContext::new_with_signer(cpi_program, transfer_instruction, &signer);
+        anchor_spl::token::transfer(cpi_ctx, fee)?;
 
         Ok(())
     }
@@ -82,7 +107,7 @@ mod token_minter {
 #[derive(Accounts)]
 #[instruction(params: InitTokenParams)]
 pub struct InitToken<'info> {
-    /// CHECK: new mwtaplex account being created 
+    /// CHECK: new metaplex account being created 
     #[account(mut)]
     pub metadata: UncheckedAccount<'info>,
 
@@ -131,8 +156,24 @@ pub struct MintTokens<'info> {
 
 #[derive(Accounts)]
 pub struct TransferToken<'info> {
+    /// CHECK: This is not dangerous because we don't read or write from this account
+    #[account(mut)]
+    pub from: UncheckedAccount<'info>,
+    /// CHECK: This is not dangerous because we don't read or write from this account
+    #[account(mut)]
+    pub to: AccountInfo<'info>,
+    #[account(
+        mut,
+        seeds = [b"mint"],
+        bump,
+        mint::authority = mint,
+    )]
+    pub mint: Account<'info, Mint>,
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
-    // TODO: 
+    pub associated_token_program: Program<'info, AssociatedToken>,
 }
 
 // 5. Define the init token params
